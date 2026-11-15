@@ -1,0 +1,10 @@
+This project is unofficial Fan Content permitted under the Wizards of the Coast Fan Content Policy. It is not approved or endorsed by Wizards of the Coast.
+Portions of the materials used are property of Wizards of the Coast. (c) Wizards of the Coast LLC. Magic: The Gathering is a trademark of Wizards of the Coast LLC.
+
+The base is computed from the card pictures of Scryfall (https://scryfall.com), fetched the way its API documentation asks: one call to the /bulk-data endpoint, the
+"Unique Artwork" bulk file for the list, the image servers for the pictures. The base holds Scryfall's `illustration_id` of each artwork and numbers computed from a small
+reduction of its picture; it holds no picture, no name, no text and no price. This project is not affiliated with, and not endorsed by, Scryfall.
+
+Questions and removal requests (including from Scryfall): see the README, section "Questions and removal requests".
+
+The scripts in scripts/ are MIT licensed (see LICENSE).

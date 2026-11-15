@@ -1,0 +1,113 @@
+name: weekly
+
+# Adds the illustrations Scryfall has published since the last run to the card-fingerprint base and publishes it on GitHub Pages.
+# Scryfall refreshes its bulk files every 12-24 hours (the "Unique Artwork" file is rebuilt around 10:00 UTC), so Monday at 12:40 UTC always sees the previous
+# days' sets. A run with nothing new publishes nothing: it only records that it looked. `bootstrap` builds the whole base from nothing (the FIRST run, and only
+# that: a scheduled run that cannot read the published base stops, it never starts again from scratch on its own).
+on:
+  schedule:
+    - cron: "40 12 * * 1"
+  workflow_dispatch:
+    inputs:
+      bootstrap:
+        description: "Build the whole base from Scryfall's bulk file (first run only; about 15 minutes)"
+        type: boolean
+        default: false
+      republish:
+        description: "Publish the current base and the static files again even if nothing is new"
+        type: boolean
+        default: false
+
+# The actions are pinned to a commit (a moved or hijacked tag cannot change what runs with write access to this repository), each with the version it is.
+# To update: `gh api repos/actions/<name>/releases/latest --jq .tag_name`, then `gh api repos/actions/<name>/commits/<tag> --jq .sha`, read the release notes,
+# then run this workflow with `republish`.
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: weekly
+  cancel-in-progress: false
+
+jobs:
+  weekly:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+
+      # The pictures are decoded with Pillow, pinned: another version could decode a picture a hair differently, and the rows already published must not change meaning.
+      - name: Python with Pillow
+        run: |
+          python3 -m venv work/venv
+          work/venv/bin/pip install --quiet pillow==12.1.1
+          echo "FP_PYTHON=$PWD/work/venv/bin/python3" >> "$GITHUB_ENV"
+
+      - name: Tests of the job
+        run: node scripts/selftest.mjs
+
+      # The published base IS the state: the job reads it back from the site (every shard checked against the index's hash) and adds after it. A site that cannot be
+      # read stops the job (three tries, then an error), it never rebuilds the base from nothing by itself.
+      - name: Build
+        id: build
+        run: |
+          if [ "${{ inputs.bootstrap }}" = "true" ]; then
+            node scripts/build.mjs --bootstrap --out work/out --cache work/pictures
+          else
+            node scripts/build.mjs --state-url "https://louis1190.github.io/mtg-card-fingerprints/fp" --out work/out --cache work/pictures
+          fi
+          echo "changed=$(node -p 'require("./work/out/build-info.json").changed')" >> "$GITHUB_OUTPUT"
+
+      - name: What to publish
+        id: publish
+        run: |
+          if [ "${{ steps.build.outputs.changed }}" = "true" ] || [ "${{ inputs.republish }}" = "true" ] || [ "${{ inputs.bootstrap }}" = "true" ]; then
+            echo "go=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "go=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Assemble the site
+        if: steps.publish.outputs.go == 'true'
+        run: |
+          mkdir -p site/fp
+          cp work/out/index.json work/out/s*.bin.gz site/fp/
+          cp site-static/* site/
+
+      - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+        if: steps.publish.outputs.go == 'true'
+
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        if: steps.publish.outputs.go == 'true'
+        with:
+          path: site
+
+      - name: Deploy
+        id: deployment
+        if: steps.publish.outputs.go == 'true'
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
+
+      # One small commit a week: a public repository's scheduled workflows are switched off after 60 days without activity.
+      - name: Record the run
+        run: |
+          node -e '
+            const fs = require("fs");
+            const b = JSON.parse(fs.readFileSync("work/out/build-info.json", "utf8"));
+            let s = {};
+            try { s = JSON.parse(fs.readFileSync("status.json", "utf8")); } catch {}
+            s = { ...s, checkedOn: new Date().toISOString().slice(0, 10), bulk: b.bulk, rows: b.n };
+            if (b.changed) s.lastChange = { on: s.checkedOn, added: b.added, rows: b.n };
+            fs.writeFileSync("status.json", JSON.stringify(s, null, 1) + "\n");
+          '
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add status.json
+          git diff --cached --quiet || { git commit -m "status: $(node -p 'require("./status.json").rows') illustrations, checked $(node -p 'require("./status.json").checkedOn')" && git push; }
