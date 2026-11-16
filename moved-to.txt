@@ -1,0 +1,2 @@
+# Where the plugin should look for these files when they move. Empty (nothing but comments) = not moved. One address, https, like https://example.org/fp
+# After changing it, run the "weekly" workflow. See "Moving the files" in README.md. Only works while the address in the installed plugin still answers.

@@ -2,7 +2,7 @@
 // Refuse rather than publish something doubtful.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { DESCRIPTORS, DESCRIPTOR_DIMS, parseIndex } from "./plugin.bundle.mjs";
+import { DESCRIPTORS, DESCRIPTOR_DIMS, indexMoved, parseIndex } from "./plugin.bundle.mjs";
 import { gunzip, rowsOfRaw, sha256 } from "./rows.mjs";
 
 export const MIN_ROWS = 45_000; // the first base had 50 541 once the repeated illustrations were left out
@@ -12,8 +12,11 @@ export const MEAN_NIBBLE_BAND = { hog: [9.5, 10.7], tinylum: [7.0, 8.0], dct: [7
 
 /** Throws an Error naming the first gate that fails; returns what it read. `minRows` and `bands` are overridable for the tests only. */
 export function runGates({ dir, previousIndex, failedPictures = 0, newRows = 0, minRows = MIN_ROWS, bands = MEAN_NIBBLE_BAND }) {
-	const index = parseIndex(JSON.parse(readFileSync(join(dir, "index.json"), "utf8")));
+	const rawIndex = JSON.parse(readFileSync(join(dir, "index.json"), "utf8"));
+	const index = parseIndex(rawIndex);
 	if (!index) throw new Error("gate: index.json is not an index the plugin reads");
+	// a `moved` address is where devices send their requests: it must be one the plugin follows, written the way the plugin reads it (or devices would ignore it, or follow another thing than was meant)
+	if (rawIndex.moved !== undefined && indexMoved(rawIndex) !== rawIndex.moved) throw new Error("gate: the index's moved address is not one the plugin follows");
 	if (index.n < minRows) throw new Error(`gate: only ${index.n} rows (the floor is ${minRows})`);
 	if (previousIndex && index.n < previousIndex.n) throw new Error(`gate: the base shrank, ${previousIndex.n} -> ${index.n} (rows are only ever added)`);
 	if (previousIndex && JSON.stringify(index.m) !== JSON.stringify(previousIndex.m)) throw new Error("gate: the quantisation ranges changed (they are fixed for ever)");

@@ -4,7 +4,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { USER_AGENT } from "./bulk.mjs";
 import { gunzip, rowsOfRaw, sha256 } from "./rows.mjs";
-import { parseIndex } from "./plugin.bundle.mjs";
+import { indexMoved, parseIndex } from "./plugin.bundle.mjs";
 
 async function bytesFromUrl(url, fetchImpl, pauseMs = 5000) {
 	let last;
@@ -21,7 +21,7 @@ async function bytesFromUrl(url, fetchImpl, pauseMs = 5000) {
 	throw last; // the job stops: it never starts the base again from nothing on its own
 }
 
-/** { index, rows, previous } where previous = [{ file, raw, gz }] by shard position (what `buildShards` may reuse), or null when `source` has no index at all (a folder without index.json). */
+/** { index, rows, previous, moved } (moved: the address the previous index pointed to, or null) where previous = [{ file, raw, gz }] by shard position (what `buildShards` may reuse), or null when `source` has no index at all (a folder without index.json). */
 export async function readState({ dir, url, fetchImpl = fetch, pauseMs = 5000 }) {
 	let get;
 	if (dir) {
@@ -32,7 +32,8 @@ export async function readState({ dir, url, fetchImpl = fetch, pauseMs = 5000 })
 		if (!/^https:\/\//.test(base)) throw new Error("the state address must be https");
 		get = (name) => bytesFromUrl(`${base}/${name}`, fetchImpl, pauseMs);
 	} else throw new Error("readState needs a dir or a url");
-	const index = parseIndex(JSON.parse((await get("index.json")).toString("utf8")));
+	const rawIndex = JSON.parse((await get("index.json")).toString("utf8"));
+	const index = parseIndex(rawIndex);
 	if (!index) throw new Error("the previous index is not one this job reads");
 	const rows = [];
 	const previous = [];
@@ -44,5 +45,5 @@ export async function readState({ dir, url, fetchImpl = fetch, pauseMs = 5000 })
 		previous.push({ file: info.file, raw, gz });
 	}
 	if (rows.length !== index.n) throw new Error("the previous index counts the wrong number of rows");
-	return { index, rows, previous };
+	return { index, rows, previous, moved: indexMoved(rawIndex) };
 }

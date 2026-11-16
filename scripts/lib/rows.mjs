@@ -75,8 +75,14 @@ export function buildShards(rows, perShard, previous = []) {
 	return shards;
 }
 
-export function indexOf(shards, m, date) {
-	return { v: 1, date, n: shards.reduce((n, s) => n + s.rows, 0), m, shards: shards.map((s) => ({ file: s.file, rows: s.rows, sha256: s.sha256 })) };
+/** `moved`: the canonical address the plugin is asked to move to (`parseMovedAddress`), or null for none; the field is written only when there is one. */
+export function indexOf(shards, m, date, moved = null) {
+	return { v: 1, date, n: shards.reduce((n, s) => n + s.rows, 0), m, shards: shards.map((s) => ({ file: s.file, rows: s.rows, sha256: s.sha256 })), ...(moved ? { moved } : {}) };
+}
+
+/** Whether a run has something to publish: no previous base, a new row, a shard that is not the previous one's, another row count, or another `moved` address than the published index carries. */
+export function baseChanged({ state, newRows, shards, index, moved }) {
+	return !state || newRows > 0 || shards.some((s) => !s.reused) || index.n !== state.index.n || (state.moved ?? null) !== (moved ?? null);
 }
 
 export const gunzip = (gz) => gunzipSync(gz);

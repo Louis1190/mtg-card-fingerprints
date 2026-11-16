@@ -60,9 +60,9 @@ jobs:
         id: build
         run: |
           if [ "${{ inputs.bootstrap }}" = "true" ]; then
-            node scripts/build.mjs --bootstrap --out work/out --cache work/pictures
+            node scripts/build.mjs --bootstrap --out work/out --cache work/pictures --moved-file moved-to.txt
           else
-            node scripts/build.mjs --state-url "https://louis1190.github.io/mtg-card-fingerprints/fp" --out work/out --cache work/pictures
+            node scripts/build.mjs --state-url "https://louis1190.github.io/mtg-card-fingerprints/fp" --out work/out --cache work/pictures --moved-file moved-to.txt
           fi
           echo "changed=$(node -p 'require("./work/out/build-info.json").changed')" >> "$GITHUB_OUTPUT"
 

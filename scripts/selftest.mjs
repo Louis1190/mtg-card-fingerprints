@@ -7,9 +7,10 @@ import { join } from "node:path";
 import { gzipSync } from "node:zlib";
 import { listPictures } from "./lib/bulk.mjs";
 import { runGates } from "./lib/gates.mjs";
-import { FIXED_M, buildShards, indexOf, packShardRaw, quantize, rowOf, rowsOfRaw } from "./lib/rows.mjs";
+import { FIXED_M, baseChanged, buildShards, indexOf, packShardRaw, quantize, rowOf, rowsOfRaw } from "./lib/rows.mjs";
+import { readMovedFile } from "./lib/moved.mjs";
 import { readState } from "./lib/state.mjs";
-import { DESCRIPTORS, DESCRIPTOR_DIMS, parseIndex } from "./lib/plugin.bundle.mjs";
+import { DESCRIPTORS, DESCRIPTOR_DIMS, indexMoved, parseIndex, parseMovedAddress } from "./lib/plugin.bundle.mjs";
 
 let passed = 0;
 const failures = [];
@@ -61,6 +62,51 @@ await test("an index written here is accepted by the plugin's parser, and refuse
 	assert.ok(parseIndex(idx));
 	assert.equal(parseIndex({ ...idx, n: idx.n + 1 }), null);
 	assert.equal(parseIndex({ ...idx, shards: [{ ...idx.shards[0], file: "../x" }] }), null);
+});
+await test("moved: an index can carry the address devices are sent to; the plugin's parser still reads it and sees the address, and without one the field is absent", () => {
+	const dir = fresh();
+	const shards = writeBase(dir, rows);
+	const plain = indexOf(shards, FIXED_M, "2026-11-11");
+	assert.ok(!("moved" in plain));
+	assert.equal(indexMoved(plain), null);
+	const pointing = indexOf(shards, FIXED_M, "2026-11-11", "https://files.example.org/fp");
+	assert.equal(pointing.moved, "https://files.example.org/fp");
+	assert.ok(parseIndex(JSON.parse(JSON.stringify(pointing))), "an index with the field is still an index the plugin reads");
+	assert.equal(indexMoved(JSON.parse(JSON.stringify(pointing))), "https://files.example.org/fp");
+});
+await test("moved-to.txt: no file, or nothing but comments, means not moved; one address is read the way the plugin compares it; anything the plugin would not follow STOPS the job", async () => {
+	const dir = fresh();
+	mkdirSync(dir, { recursive: true });
+	const file = (text) => { const f = join(dir, `m${n++}.txt`); writeFileSync(f, text); return f; };
+	assert.equal(readMovedFile(undefined), null);
+	assert.equal(readMovedFile(join(dir, "absent.txt")), null);
+	assert.equal(readMovedFile(file("")), null);
+	assert.equal(readMovedFile(file("# nothing here\n\n  # still nothing\n")), null);
+	assert.equal(readMovedFile(file("# the new place\nhttps://new.example.org/fp/\n")), "https://new.example.org/fp");
+	assert.equal(readMovedFile(file("https://NEW.example.org/a/./b//\r\n")), "https://new.example.org/a/b");
+	for (const bad of ["http://new.example.org/fp", "https://1.2.3.4/fp", ["https://user:pw", "new.example.org/fp"].join("@"), "https://new.example.org/fp?x=1", "https://new.example.org/fp#x", "https://localhost/fp", "new.example.org/fp", "https://a.example.org/x\nhttps://b.example.org/y"]) {
+		await throwsWith(async () => readMovedFile(file(bad)), /one address only|is not an address the plugin follows/);
+	}
+	assert.equal(parseMovedAddress("https://new.example.org/fp"), "https://new.example.org/fp");
+});
+await test("gate: a moved address the plugin follows, in the form it compares, passes; one it would ignore or read differently is refused", async () => {
+	const withMoved = (value) => { const dir = fresh(); writeBase(dir, rows); const idx = JSON.parse(readFileSync(join(dir, "index.json"), "utf8")); idx.moved = value; writeFileSync(join(dir, "index.json"), JSON.stringify(idx)); return dir; };
+	assert.equal(runGates({ dir: withMoved("https://new.example.org/fp"), ...small }).rowsSeen, 50);
+	for (const bad of ["https://new.example.org/fp/", "http://new.example.org/fp", "https://1.2.3.4/fp", 7, ""]) await throwsWith(async () => runGates({ dir: withMoved(bad), ...small }), /moved address is not one the plugin follows/);
+});
+await test("a run publishes when the moved address changes, appears or goes away, and not when it stays the same", () => {
+	const shards = buildShards(rows, 20);
+	const index = indexOf(shards, FIXED_M, "2026-11-11");
+	const same = shards.map((s) => ({ ...s, reused: true }));
+	const state = (moved) => ({ index, moved });
+	const run = (extra) => baseChanged({ state: state(null), newRows: 0, shards: same, index, moved: null, ...extra });
+	assert.equal(run({}), false);
+	assert.equal(run({ moved: "https://new.example.org/fp" }), true);
+	assert.equal(baseChanged({ state: state("https://new.example.org/fp"), newRows: 0, shards: same, index, moved: "https://new.example.org/fp" }), false);
+	assert.equal(baseChanged({ state: state("https://new.example.org/fp"), newRows: 0, shards: same, index, moved: null }), true);
+	assert.equal(baseChanged({ state: state("https://a.example.org/fp"), newRows: 0, shards: same, index, moved: "https://b.example.org/fp" }), true);
+	assert.equal(run({ newRows: 1 }), true);
+	assert.equal(run({ state: null }), true);
 });
 await test("a shard whose content did not change keeps the previous file BYTES; one that changed does not", () => {
 	const first = buildShards(rows, 20);
@@ -145,6 +191,13 @@ await test("state: a previous base is read back; a missing index is null; a tamp
 	gz[10] ^= 1;
 	writeFileSync(join(dir, "s0.bin.gz"), gz);
 	await throwsWith(() => readState({ dir }), /does not match its hash/);
+});
+await test("state: the address the previous index pointed to is read back (null when it had none)", async () => {
+	const dir = fresh();
+	const shards = writeBase(dir, rows);
+	assert.equal((await readState({ dir })).moved, null);
+	writeFileSync(join(dir, "index.json"), JSON.stringify(indexOf(shards, FIXED_M, "2026-11-11", "https://new.example.org/fp")));
+	assert.equal((await readState({ dir })).moved, "https://new.example.org/fp");
 });
 await test("state from the site: a download that fails once is tried again; one that keeps failing STOPS the job; an http address is refused", async () => {
 	const dir = fresh();

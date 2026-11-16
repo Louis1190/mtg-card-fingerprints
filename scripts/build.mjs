@@ -1,7 +1,7 @@
 // One run of the fingerprint data job: Scryfall's "Unique Artwork" bulk file -> the pictures that are new -> described with the
 // PLUGIN'S OWN code -> a base in the format the plugin reads, ready to publish on a static site. Nothing is published by this script.
 //   node build.mjs --out <dir> [--state <dir> | --state-url <https address>] [--bootstrap] [--bulk <unique_artwork.jsonl.gz>] [--cache <picture dir>]
-//                  [--no-fetch] [--limit-new <n>] [--selftest-rows 200] [--rows-per-shard 6400]
+//                  [--no-fetch] [--limit-new <n>] [--selftest-rows 200] [--rows-per-shard 6400] [--moved-file <file>]
 // --bootstrap builds from nothing (the only way to start without a state); otherwise the previous base is read and ONLY the illustrations it lacks are added, in the bulk file's order, after the
 // rows it has (rows are never removed or changed: a device that holds a shard keeps its meaning). --bulk uses a file already on disk (a rehearsal); without it ONE call to /bulk-data and one
 // download. --cache is the picture folder (kept between runs by the workflow, so a rebuild fetches only what it lacks); --no-fetch refuses to fetch (a rehearsal on cached pictures).
@@ -13,7 +13,8 @@ import { fileURLToPath } from "node:url";
 import { downloadBulk, fetchBulkItem, listPictures } from "./lib/bulk.mjs";
 import { fetchPictures, pictureFile } from "./lib/pictures.mjs";
 import { runGates } from "./lib/gates.mjs";
-import { FIXED_M, ROWS_PER_SHARD, buildShards, indexOf, rowOf } from "./lib/rows.mjs";
+import { FIXED_M, ROWS_PER_SHARD, baseChanged, buildShards, indexOf, rowOf } from "./lib/rows.mjs";
+import { readMovedFile } from "./lib/moved.mjs";
 import { readState } from "./lib/state.mjs";
 import { CARD_H, CARD_W, describeCard } from "./lib/plugin.bundle.mjs";
 
@@ -101,7 +102,9 @@ try {
 	const shards = buildShards(rows, perShard, state?.previous ?? []);
 	mkdirSync(out, { recursive: true });
 	const date = new Date().toISOString().slice(0, 10);
-	const index = indexOf(shards, m, date);
+	const moved = readMovedFile(opt("--moved-file") ? resolve(opt("--moved-file")) : null); // devices are sent there (docs of the data repository: "Moving the files")
+	if (moved) log(`the index points devices to ${moved}`);
+	const index = indexOf(shards, m, date, moved);
 	for (const s of shards) writeFileSync(join(out, s.file), s.gz);
 	writeFileSync(join(out, "index.json"), JSON.stringify(index));
 	log(`wrote ${shards.length} shards (${shards.filter((s) => s.reused).length} kept as they were), n ${index.n}`);
@@ -117,7 +120,7 @@ try {
 		if (res.checked >= 20 && res.different / res.checked > 0.02) throw new Error(`self-test: ${res.different} of ${res.checked} sampled rows differ from their picture`);
 	}
 	// `changed` is what the workflow publishes on: something was added, or a shard's content is not what the previous base held
-	const changed = !state || newRows.length > 0 || shards.some((s) => !s.reused) || index.n !== state.index.n;
+	const changed = baseChanged({ state, newRows: newRows.length, shards, index, moved });
 	writeFileSync(join(out, "build-info.json"), JSON.stringify({ built: new Date().toISOString(), bulk: bulkInfo.updated_at, n: index.n, added: newRows.length, bootstrap, changed }));
 	log(changed ? "the base changed: it can be published" : "nothing new: nothing to publish");
 	log("done");
